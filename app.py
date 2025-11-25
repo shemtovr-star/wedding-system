@@ -1,19 +1,18 @@
 from flask import Flask, render_template, request, redirect, url_for
+import sqlite3
 
 app = Flask(__name__)
 
-# "מסד נתונים" זמני בזיכרון – מספיק להדגמת הספרינט
-tasks = []
-expenses = []
-next_task_id = 1
-next_expense_id = 1
-
+# פונקציה לחיבור ל-Database
+def get_db_connection():
+    conn = sqlite3.connect('database.db')
+    conn.row_factory = sqlite3.Row  # מאפשר גישה לעמודות בשם
+    return conn
 
 @app.route("/")
 def home():
     # דף הבית יעביר אוטומטית למסך המשימות
     return redirect(url_for("tasks_page"))
-
 
 @app.route("/tasks", methods=["GET"])
 def tasks_page():
@@ -22,34 +21,34 @@ def tasks_page():
     - מציג רשימת משימות
     - מאפשר סינון לפי סטטוס (חדש/בתהליך/בוצע)
     """
-    status_filter = request.args.get("status")  # למשל ?status=חדש
-
+    status_filter = request.args.get("status")
+    
+    conn = get_db_connection()
+    
     if status_filter:
-        filtered_tasks = [t for t in tasks if t["status"] == status_filter]
+        tasks = conn.execute('SELECT * FROM tasks WHERE status = ?', (status_filter,)).fetchall()
     else:
-        filtered_tasks = tasks
-
-    return render_template("tasks.html", tasks=filtered_tasks, current_status=status_filter)
-
+        tasks = conn.execute('SELECT * FROM tasks').fetchall()
+    
+    conn.close()
+    
+    return render_template("tasks.html", tasks=tasks, current_status=status_filter)
 
 @app.route("/tasks/create", methods=["POST"])
 def create_task():
     """
     יצירת משימה חדשה (User Story: יצירת משימה)
     """
-    global next_task_id
     title = request.form.get("title")
-
+    
     if title:
-        tasks.append({
-            "id": next_task_id,
-            "title": title,
-            "status": "חדש"
-        })
-        next_task_id += 1
-
+        conn = get_db_connection()
+        conn.execute('INSERT INTO tasks (title, status) VALUES (?, ?)', 
+                     (title, 'חדש'))
+        conn.commit()
+        conn.close()
+    
     return redirect(url_for("tasks_page"))
-
 
 @app.route("/tasks/<int:task_id>/edit", methods=["POST"])
 def edit_task(task_id):
@@ -58,61 +57,72 @@ def edit_task(task_id):
     """
     new_title = request.form.get("title")
     new_status = request.form.get("status")
-
-    for t in tasks:
-        if t["id"] == task_id:
-            if new_title:
-                t["title"] = new_title
-            if new_status:
-                t["status"] = new_status
-            break
-
+    
+    conn = get_db_connection()
+    
+    if new_title and new_status:
+        conn.execute('UPDATE tasks SET title = ?, status = ? WHERE id = ?',
+                     (new_title, new_status, task_id))
+    elif new_title:
+        conn.execute('UPDATE tasks SET title = ? WHERE id = ?',
+                     (new_title, task_id))
+    elif new_status:
+        conn.execute('UPDATE tasks SET status = ? WHERE id = ?',
+                     (new_status, task_id))
+    
+    conn.commit()
+    conn.close()
+    
     return redirect(url_for("tasks_page"))
-
 
 @app.route("/tasks/<int:task_id>/delete", methods=["POST"])
 def delete_task(task_id):
     """
     מחיקת משימה (User Story: מחיקת משימה)
     """
-    global tasks
-    tasks = [t for t in tasks if t["id"] != task_id]
+    conn = get_db_connection()
+    conn.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
+    conn.commit()
+    conn.close()
+    
     return redirect(url_for("tasks_page"))
-
 
 @app.route("/budget", methods=["GET"])
 def budget_page():
     """
     מסך הוצאות + סיכום (User Stories: הוספת הוצאה, סיכום הוצאות)
     """
-    total = sum(e["amount"] for e in expenses)
+    conn = get_db_connection()
+    expenses = conn.execute('SELECT * FROM expenses').fetchall()
+    
+    # חישוב סכום כולל
+    total = sum(expense['amount'] for expense in expenses)
+    
+    conn.close()
+    
     return render_template("budget.html", expenses=expenses, total=total)
-
 
 @app.route("/budget/add", methods=["POST"])
 def add_expense():
     """
     הוספת הוצאה (User Story: הוספת הוצאה)
     """
-    global next_expense_id
     description = request.form.get("description")
     amount_str = request.form.get("amount")
-
+    
     try:
         amount = float(amount_str)
     except (TypeError, ValueError):
         amount = 0
-
+    
     if description and amount > 0:
-        expenses.append({
-            "id": next_expense_id,
-            "description": description,
-            "amount": amount
-        })
-        next_expense_id += 1
-
+        conn = get_db_connection()
+        conn.execute('INSERT INTO expenses (description, amount) VALUES (?, ?)',
+                     (description, amount))
+        conn.commit()
+        conn.close()
+    
     return redirect(url_for("budget_page"))
 
-
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=5001)
